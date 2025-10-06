@@ -89,13 +89,19 @@ def test_historical_oi():
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         print(f"📡 Test Response Status: {response.status_code}")
-        print(f"📊 Test Response Body: {response.text}")
+        
+        # Limit response output to prevent "output too large" errors
+        response_text = response.text
+        if len(response_text) > 500:
+            print(f"📊 Test Response Body (truncated): {response_text[:500]}...")
+        else:
+            print(f"📊 Test Response Body: {response_text}")
         
         if response.status_code == 200:
             data = response.json()
             return {"success": True, "data": data}
         else:
-            return {"error": f"HTTP {response.status_code}: {response.text}"}
+            return {"error": f"HTTP {response.status_code}: Limited output"}
             
     except Exception as e:
         print(f"💥 Test API Error: {e}")
@@ -605,6 +611,43 @@ def index():
     """Main dashboard"""
     return render_template('index.html')
 
+@app.route('/ping')
+def ping():
+    """Simple ping endpoint for health checks and keepalive"""
+    return jsonify({
+        'status': 'ok',
+        'timestamp': get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST'),
+        'message': 'Angel One Market Data App is running'
+    })
+
+@app.route('/keepalive')
+def keepalive():
+    """Keepalive endpoint with app status"""
+    try:
+        # Check if we have cached data
+        has_data = any([
+            cached_data.get('nifty_50'),
+            cached_data.get('bank_nifty'),
+            cached_data.get('nifty_futures'),
+            cached_data.get('bank_futures')
+        ])
+        
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST'),
+            'app_name': 'Angel One Market Data',
+            'has_auth_token': bool(cached_data.get('auth_token')),
+            'has_market_data': has_data,
+            'last_update': cached_data['last_update'].strftime('%Y-%m-%d %H:%M:%S IST') if cached_data.get('last_update') else None,
+            'uptime': 'running'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'timestamp': get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST'),
+            'error': str(e)
+        }), 500
+
 @app.route('/api/refresh-data')
 def refresh_data():
     """Refresh all market data"""
@@ -696,9 +739,22 @@ def debug_api():
         
         response = requests.post(MARKET_DATA_URL, json=request_data, headers=headers, timeout=30)
         
+        response_data = response.json() if response.status_code == 200 else response.text
+        
+        # Limit response size for debug output
+        if isinstance(response_data, dict) and len(str(response_data)) > 1000:
+            limited_response = {
+                'status': response_data.get('status'),
+                'message': response_data.get('message'),
+                'data_count': len(response_data.get('data', {}).get('fetched', [])) if response_data.get('data') else 0,
+                'note': 'Response truncated for display'
+            }
+        else:
+            limited_response = response_data
+        
         return jsonify({
             'status_code': response.status_code,
-            'response': response.json() if response.status_code == 200 else response.text,
+            'response': limited_response,
             'auth_token_present': bool(cached_data['auth_token'])
         })
         
@@ -722,11 +778,18 @@ def debug_pcr():
         
         response = requests.get(PCR_URL, headers=headers, timeout=30)
         
+        # Limit response output for debug
+        response_text = response.text
+        if len(response_text) > 1000:
+            truncated_text = response_text[:1000] + "... (truncated)"
+        else:
+            truncated_text = response_text
+        
         return jsonify({
             'status_code': response.status_code,
-            'response_text': response.text,
+            'response_text': truncated_text,
             'pcr_url': PCR_URL,
-            'headers_sent': dict(headers)
+            'headers_sent': 'Headers present but not shown for security'
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
