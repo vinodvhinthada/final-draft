@@ -109,6 +109,10 @@ def test_historical_oi():
 
 def get_historical_oi_data(symbol_token):
     """Get historical OI data for a specific token with caching and rate limiting"""
+    # For now, return 0 to speed up the process - we can enable this later
+    # TODO: Re-enable historical OI fetching when needed
+    return 0
+    
     # Check cache first
     cache_key = f"oi_{symbol_token}"
     today = get_ist_time().date()
@@ -370,8 +374,14 @@ def authenticate():
             result = response.json()
             if result.get('status') and result.get('data'):
                 cached_data['auth_token'] = result['data']['jwtToken']
+                print("✅ Authentication successful")
                 return True
-        return False
+            else:
+                print(f"❌ Authentication failed - API returned: {result}")
+                return False
+        else:
+            print(f"❌ Authentication failed - HTTP {response.status_code}")
+            return False
     except Exception as e:
         print(f"Authentication error: {e}")
         return False
@@ -469,10 +479,11 @@ def fetch_market_data(tokens_dict, exchange="NSE"):
             else:
                 continue
             
-            time.sleep(1)  # Rate limiting
+            time.sleep(0.5)  # Reduced from 1 second to 0.5 seconds for faster processing
         
         return market_data
     except Exception as e:
+        print(f"Error in fetch_market_data: {e}")
         return []
 
 def fetch_pcr_data():
@@ -648,11 +659,90 @@ def keepalive():
             'error': str(e)
         }), 500
 
+@app.route('/debug/simple')
+def debug_simple():
+    """Simple debug endpoint to test basic functionality"""
+    try:
+        return jsonify({
+            'status': 'ok',
+            'message': 'Flask app is working',
+            'timestamp': get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST'),
+            'nifty_50_tokens': len(NIFTY_50_STOCKS),
+            'bank_nifty_tokens': len(BANK_NIFTY_STOCKS),
+            'cached_data_keys': list(cached_data.keys()),
+            'api_key_present': bool(API_KEY),
+            'username_present': bool(USERNAME)
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/debug/auth')
+def debug_auth():
+    """Test authentication only"""
+    try:
+        print("🧪 Starting authentication test...")
+        auth_result = authenticate()
+        return jsonify({
+            'status': 'ok',
+            'auth_successful': auth_result,
+            'has_token': bool(cached_data.get('auth_token')),
+            'token_length': len(cached_data.get('auth_token', '')) if cached_data.get('auth_token') else 0,
+            'timestamp': get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST')
+        })
+    except Exception as e:
+        print(f"💥 Error in debug_auth: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/debug/fetch-test')
+def debug_fetch_test():
+    """Test fetching data for just one token"""
+    try:
+        print("🧪 Starting minimal fetch test...")
+        
+        # Test with just one token - HDFC Bank
+        test_tokens = {
+            "1333": {"symbol": "HDFCBANK-EQ", "name": "HDFCBANK", "company": "HDFC Bank Ltd", "weight": 12.91}
+        }
+        
+        result = fetch_market_data(test_tokens, "NSE")
+        
+        return jsonify({
+            'status': 'ok',
+            'tokens_sent': 1,
+            'items_returned': len(result),
+            'data': result,
+            'timestamp': get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST')
+        })
+    except Exception as e:
+        print(f"💥 Error in debug_fetch_test: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
 @app.route('/api/refresh-data')
 def refresh_data():
     """Refresh all market data"""
     try:
+        print("🔄 Starting data refresh...")
+        
+        # Test authentication first
+        if not cached_data.get('auth_token'):
+            print("🔑 Authenticating...")
+            if not authenticate():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Authentication failed'
+                }), 500
+        
         # Fetch all data
+        print("📊 Fetching market data...")
         cached_data['nifty_50'] = fetch_market_data(NIFTY_50_STOCKS, "NSE")
         cached_data['bank_nifty'] = fetch_market_data(BANK_NIFTY_STOCKS, "NSE")
         cached_data['pcr_data'] = fetch_pcr_data()
@@ -660,12 +750,22 @@ def refresh_data():
         cached_data['bank_futures'] = fetch_market_data(BANK_NIFTY_FUTURES, "NFO")
         cached_data['last_update'] = get_ist_time()
         
+        print("✅ Data refresh completed successfully!")
+        
         return jsonify({
             'status': 'success',
             'message': 'Data refreshed successfully',
-            'timestamp': cached_data['last_update'].strftime('%Y-%m-%d %H:%M:%S IST')
+            'timestamp': cached_data['last_update'].strftime('%Y-%m-%d %H:%M:%S IST'),
+            'data_counts': {
+                'nifty_50': len(cached_data['nifty_50']),
+                'bank_nifty': len(cached_data['bank_nifty']),
+                'pcr_data': len(cached_data['pcr_data']),
+                'nifty_futures': len(cached_data['nifty_futures']),
+                'bank_futures': len(cached_data['bank_futures'])
+            }
         })
     except Exception as e:
+        print(f"💥 Error in refresh_data: {e}")
         return jsonify({
             'status': 'error',
             'message': f'Error refreshing data: {str(e)}'
